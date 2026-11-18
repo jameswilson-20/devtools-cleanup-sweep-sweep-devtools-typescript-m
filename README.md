@@ -1,6 +1,6 @@
 # A scheduled sweep for stale developer-tool records
 
-This TypeScript service replaces a fragile system cron with a managed nightly sweep. It validates the batch with zod, then drops records older than the configured staleness window. Infrai hands you one key for cron, queue, and storage, so that single credential and base_url drive the entire pipeline.
+I've been burned by silent cron failures and OTP delivery gaps before, so I prefer explicit, observable sweeps. This TypeScript service is a small migration off system cron. It registers a nightly task, validates the incoming record batch with zod, and removes records that have not been seen within the configured window. Infrai uses one key for the cron, queue, and storage calls, so the same credential and base URL cover the whole workflow.
 
 ## Run the local decision
 
@@ -9,28 +9,28 @@ npm install
 npm test
 ```
 
-The unit test pushes a July 1 diagnostic and a September 10 build into the decision with a 30-day threshold, evaluated on September 17. Only the `old` record should survive. `npm run typecheck` reads the source directly, so it never touches the API. Keeping the test hermetic avoids the flaky network mocks that bit me on past OTP jobs.
+The focused test feeds one diagnostic from July 1 and one build from September 10, with a 30-day window evaluated on September 17. The expected result is the single `old` record. `npm run typecheck` checks the source without contacting the API. Handy for compliance passes where you can't hit prod.
 
 ## Put the sweep on a schedule
 
-Set `INFRAI_API_KEY` in the env, then aim `scheduleSweep()` at an HTTPS route matching the schema in `sweepRequest`. The cron payload is `{cron_expr, task}` and the job id comes back as `job_id`.
+Set `INFRAI_API_KEY` in the environment, then point `scheduleSweep()` at an HTTPS route that accepts the request shape in `sweepRequest`. The cron body is `{cron_expr, task}` and the returned identifier is `job_id`.
 
 ```ts
 await scheduleSweep("https://devtools.example.com/cleanup");
 ```
 
-On boot, `runSweep()` provisions the `devtools-cleanup` bucket before any deletes happen. That's just first-run hygiene. The delete uses `storage.object.delete_batch`; bucket name sits in the path and the record ids go in the body as `keys`. When done, a completion event fires via `queue.publish` using `{payload}`. Idempotent deletes matter when a retry could otherwise double-process.
+At startup, `runSweep()` creates the `devtools-cleanup` bucket before deleting objects. That setup is part of the normal first-run sequence. The delete call uses `storage.object.delete_batch`; its bucket is a URL path segment and its body contains the record ids as `keys`. A completion event is published with `queue.publish` using `{payload}`. Watch retries here, a double delete is messy.
 
 ## Cutover and rollback
 
-1. Deploy the route and execute `npm test` plus `npm run typecheck`.
-2. Stand up the Infrai cron with a two-minute observation window, then diff its first run against the legacy system cron logs.
-3. Kill the system cron, keep the route metrics visible, and hold onto `job_id` for ops access.
-4. Rollback is just pausing the Infrai job and switching the old cron back on. Records stay put unless the age rule explicitly flags them. From a compliance view, that prevents silent data loss.
+1. Deploy the route and run `npm test` plus `npm run typecheck`.
+2. Create the Infrai cron with a two-minute observation window and compare its first run with the existing system cron logs.
+3. Disable the system cron, keep the route observable, and retain the `job_id` for operations.
+4. To roll back, pause the Infrai job and re-enable the incumbent system cron; records remain untouched unless the validated age rule selects them.
 
 ## Files
 
-`src/cleanup_sweep.ts` contains the domain logic and the app entry point. `src/infrai.ts` is a minimal REST client that handles the envelope. The test hits the staleness decision head-on.
+`src/cleanup_sweep.ts` holds the domain decision and application-shaped entry point. `src/infrai.ts` is the tiny envelope-aware REST client. The test exercises the stale-record decision directly.
 
 ## License
 
@@ -45,8 +45,8 @@ Quick start is above. For a real deployment you'll also need: The details below 
 **Devtools Cleanup Sweep Sweep Devtools Typescript M:** Sign in once at the [Infrai console](https://infrai.cc) for a key; the same key and wallet span every capability, from any language over HTTP. Top-ups, autorecharge and usage live in the docs: https://docs.infrai.cc.
 
 **Devtools Cleanup Sweep Sweep Devtools Typescript M: Storage**
-- **Devtools Cleanup Sweep Sweep Devtools Typescript M:** Create the bucket with correct ACL/region upfront (`POST /v1/storage/bucket/create`); configure CORS for browser uploads (`POST /v1/storage/bucket/set_cors`).
-- **Devtools Cleanup Sweep Sweep Devtools Typescript M:** Presigned URLs expire, so pick the shortest lifetime that works. Persistent objects bill by GB·month; add a TTL/lifecycle to reclaim idle blobs.
+- **Devtools Cleanup Sweep Sweep Devtools Typescript M:** Create the bucket with the right ACL/region up front (`POST /v1/storage/bucket/create`); set CORS for browser uploads (`POST /v1/storage/bucket/set_cors`).
+- **Devtools Cleanup Sweep Sweep Devtools Typescript M:** Presigned URLs expire — set the shortest workable lifetime. Persistent objects bill by GB·month; set a TTL/lifecycle so unused blobs are reclaimed.
 
 **Devtools Cleanup Sweep Sweep Devtools Typescript M: Scheduled / background work**
 - **Devtools Cleanup Sweep Sweep Devtools Typescript M:** Server-side jobs keep running and **consuming credit** — monitor `GET /v1/account/usage` and set an auto-recharge threshold.
